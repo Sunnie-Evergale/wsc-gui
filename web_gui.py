@@ -11,9 +11,10 @@ import sys
 import threading
 import urllib.parse
 from pathlib import Path
-from decompiler import decompile_wsc_file
+from datetime import datetime
+from decompiler import decompile_wsc_file, decode_try
 from recompiler import parse_github_format, recompile_wsc_file, content_to_binary
-from validator import WSCValidator
+from validator import WSCValidator, ValidationResult
 
 
 class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
@@ -176,11 +177,23 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
                     <input type="file" id="recompileFile" accept=".txt,.TXT" onchange="handleRecompileUpload()" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
                 </div>
 
+                <!-- Output Directory Selection -->
+                <div id="outputDirectorySection" style="margin-top: 10px; padding: 10px; background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 4px;">
+                    <label for="outputDirectory" style="display: block; margin-bottom: 5px; font-weight: bold;">📁 Output Directory:</label>
+                    <div style="display: flex; gap: 5px;">
+                        <input type="text" id="outputDirectory" placeholder="Select directory for compiled WSC files..." style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" readonly>
+                        <button class="btn" onclick="browseOutputDirectory()">📂 Browse</button>
+                        <button class="btn" onclick="resetOutputDirectory()">↺ Reset</button>
+                    </div>
+                    <div id="outputDirectoryInfo" style="margin-top: 5px; font-size: 12px; color: #666;">Default: ./recompiler_output/</div>
+                </div>
+
                 <div class="recompiler-workspace" id="recompilerWorkspace" style="display: none;">
                     <div style="display: flex; gap: 10px; margin-bottom: 10px;">
                         <button class="btn" onclick="validateRecompileContent()">🔍 Validate</button>
                         <button class="btn" onclick="compileToWSC()">🔨 Compile to WSC</button>
                         <button class="btn" onclick="downloadWSC()">💾 Download WSC</button>
+                        <button class="btn" onclick="showOutputFolder()">📁 Show Output</button>
                         <div style="flex: 1;"></div>
                         <label style="display: flex; align-items: center; gap: 5px;">
                             <input type="checkbox" id="preserveOffsets" checked>
@@ -558,6 +571,13 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
                     recompilerEntries = data.entries;
                     recompileFilename = data.filename.replace('.txt', '.wsc');
 
+                    // Debug: Log all loaded entries
+                    recompilerLog(`Loaded ${data.entries.length} entries from ${data.filename}:`, 'success');
+                    data.entries.forEach((entry, index) => {
+                        const type = entry.is_speaker ? '[SPEAKER]' : '[TEXT]';
+                        recompilerLog(`  Entry ${index + 1}: ${type} "${entry.content}"`, 'info');
+                    });
+
                     // Display content in editor
                     const content = formatEntriesAsText(data.entries);
                     document.getElementById('editorContent').value = content;
@@ -571,7 +591,7 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
                     // Show initial validation results
                     displayValidationResults(data.parse_result, data.validation_result);
 
-                    recompilerLog(`Successfully loaded ${data.entries.length} entries`, 'success');
+                    recompilerLog(`Ready to compile. Editor contains ${content.length} characters.`, 'info');
                 } else {
                     recompilerLog(`Error loading file: ${data.message}`, 'error');
                 }
@@ -678,12 +698,20 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
                 return;
             }
 
-            recompilerLog('Compiling to WSC format...', 'info');
+            // Debug: Show how many entries we're compiling
+            recompilerLog(`Compiling ${recompilerEntries.length} entries to WSC format...`, 'info');
+
+            // Log each entry being compiled
+            recompilerEntries.forEach((entry, index) => {
+                const type = entry.is_speaker ? '[SPEAKER]' : '[TEXT]';
+                recompilerLog(`  Entry ${index + 1}: ${type} "${entry.content}" (${entry.start_offset}-${entry.end_offset})`, 'info');
+            });
 
             const requestData = {
                 entries: recompilerEntries,
                 preserve_offsets: preserveOffsets,
-                filename: recompileFilename
+                filename: recompileFilename,
+                output_directory: getCurrentOutputDirectory()
             };
 
             fetch('/api/recompile/compile', {
@@ -696,6 +724,8 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
                 if (data.success) {
                     compiledWSCPath = data.file_path;
                     recompilerLog(`✅ Successfully compiled ${data.entries_count} entries`, 'success');
+                    recompilerLog(`📁 Saved to: ${data.output_folder}`, 'info');
+                    recompilerLog(`📄 Filename: ${data.filename}`, 'info');
                     recompilerLog(`File size: ${data.file_size} bytes`, 'info');
                     recompilerLog(`Offsets recalculated: ${data.offsets_recalculated ? 'Yes' : 'No'}`, 'info');
                 } else {
@@ -725,6 +755,40 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
             recompilerLog(`Downloading ${recompileFilename}...`, 'info');
         }
 
+        function showOutputFolder() {
+            recompilerLog('📁 Accessing output folder...', 'info');
+
+            fetch('/api/recompile/output')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    recompilerLog(`📡 API response received`, 'info');
+
+                    if (data.success) {
+                        recompilerLog(`✅ Output folder: ${data.output_folder}`, 'success');
+                        if (data.total_files > 0) {
+                            recompilerLog(`📄 Found ${data.total_files} compiled WSC files:`, 'success');
+                            data.files.forEach((file, index) => {
+                                recompilerLog(`  ${index + 1}. ${file.filename} (${file.file_size} bytes) - ${file.created_time}`, 'info');
+                            });
+                            recompilerLog('💡 Tip: Use Download WSC button to download the latest compiled file', 'info');
+                        } else {
+                            recompilerLog('📂 Output folder is empty. Compile a file first.', 'warning');
+                        }
+                    } else {
+                        recompilerLog(`❌ API Error: ${data.message}`, 'error');
+                    }
+                })
+                .catch(error => {
+                    recompilerLog(`❌ Network Error: ${error.message}`, 'error');
+                    recompilerLog(`   Stack: ${error.stack}`, 'error');
+                });
+        }
+
         function recompilerLog(message, type = 'info') {
             const logDiv = document.getElementById('recompileLog');
             const timestamp = new Date().toLocaleTimeString();
@@ -732,6 +796,156 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
             logDiv.innerHTML += `<div class="${className}">[${timestamp}] ${message}</div>`;
             logDiv.scrollTop = logDiv.scrollHeight;
         }
+
+        // Output Directory Management
+        let currentOutputDirectory = './recompiler_output/';
+
+        function browseOutputDirectory() {
+            fetch('/api/browse?path=' + encodeURIComponent(currentOutputDirectory))
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showDirectoryDialog(data);
+                    } else {
+                        recompilerLog(`Error browsing directories: ${data.message}`, 'error');
+                    }
+                })
+                .catch(error => {
+                    recompilerLog(`Error browsing directories: ${error.message}`, 'error');
+                });
+        }
+
+        function showDirectoryDialog(data) {
+            const dirList = data.items
+                .filter(entry => entry.type === 'directory')
+                .map(entry => `<div class="directory-item" onclick="selectDirectory('${encodeURIComponent(entry.path)}')">
+                    📁 ${entry.name}
+                </div>`)
+                .join('');
+
+            const dialogHtml = `
+                <div id="directoryDialog" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center;">
+                    <div style="background: white; padding: 20px; border-radius: 8px; max-width: 600px; max-height: 80vh; overflow-y: auto;">
+                        <h3>Select Output Directory</h3>
+                        <p>Current: <strong>${data.current_path}</strong></p>
+                        <div style="margin: 10px 0;">
+                            ${dirList}
+                        </div>
+                        <div style="display: flex; gap: 10px; margin-top: 15px;">
+                            <button class="btn" onclick="useDirectory('${encodeURIComponent(data.current_path)}')">Use Current Directory</button>
+                            <button class="btn" onclick="closeDirectoryDialog()">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            document.body.insertAdjacentHTML('beforeend', dialogHtml);
+        }
+
+        function selectDirectory(encodedPath) {
+            const path = decodeURIComponent(encodedPath);
+            fetch('/api/browse?path=' + encodeURIComponent(path))
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        updateDirectoryDialog(data);
+                    } else {
+                        recompilerLog(`Error accessing directory: ${data.message}`, 'error');
+                    }
+                });
+        }
+
+        function updateDirectoryDialog(data) {
+            const dialog = document.getElementById('directoryDialog');
+            if (dialog) {
+                const dirList = data.items
+                    .filter(entry => entry.type === 'directory')
+                    .map(entry => `<div class="directory-item" onclick="selectDirectory('${encodeURIComponent(entry.path)}')">
+                        📁 ${entry.name}
+                    </div>`)
+                    .join('');
+
+                dialog.innerHTML = `
+                    <div style="background: white; padding: 20px; border-radius: 8px; max-width: 600px; max-height: 80vh; overflow-y: auto;">
+                        <h3>Select Output Directory</h3>
+                        <p>Current: <strong>${data.current_path}</strong></p>
+                        <div style="margin: 10px 0;">
+                            ${dirList}
+                        </div>
+                        <div style="display: flex; gap: 10px; margin-top: 15px;">
+                            <button class="btn" onclick="useDirectory('${encodeURIComponent(data.current_path)}')">Use Current Directory</button>
+                            <button class="btn" onclick="closeDirectoryDialog()">Cancel</button>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        function useDirectory(encodedPath) {
+            const path = decodeURIComponent(encodedPath);
+            setOutputDirectory(path);
+            closeDirectoryDialog();
+        }
+
+        function closeDirectoryDialog() {
+            const dialog = document.getElementById('directoryDialog');
+            if (dialog) {
+                dialog.remove();
+            }
+        }
+
+        function setOutputDirectory(path) {
+            currentOutputDirectory = path;
+            document.getElementById('outputDirectory').value = path;
+            document.getElementById('outputDirectoryInfo').textContent = `Selected: ${path}`;
+
+            // Save to server settings
+            fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ outputDirectory: path })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    recompilerLog(`✅ Output directory set to: ${path}`, 'success');
+                } else {
+                    recompilerLog(`Warning: Could not save directory setting`, 'error');
+                }
+            })
+            .catch(error => {
+                recompilerLog(`Warning: Could not save directory setting`, 'error');
+            });
+        }
+
+        function resetOutputDirectory() {
+            setOutputDirectory('./recompiler_output/');
+        }
+
+        function getCurrentOutputDirectory() {
+            return currentOutputDirectory;
+        }
+
+        // Load output directory from settings on page load
+        function loadOutputDirectory() {
+            fetch('/api/settings')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.outputDirectory) {
+                        currentOutputDirectory = data.outputDirectory;
+                        document.getElementById('outputDirectory').value = data.outputDirectory;
+                        document.getElementById('outputDirectoryInfo').textContent = `Custom: ${data.outputDirectory}`;
+                    }
+                })
+                .catch(error => {
+                    console.log('Using default output directory');
+                });
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadOutputDirectory();
+        });
     </script>
 </body>
 </html>
@@ -747,6 +961,8 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json_response(self.settings)
         elif self.path.startswith('/api/browse'):
             self.handle_directory_browse()
+        elif self.path == '/api/recompile/output':
+            self.handle_recompile_output()
         else:
             self.send_error(404)
 
@@ -967,6 +1183,8 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_recompile_validate()
         elif self.path == '/api/recompile/compile':
             self.handle_recompile_compile()
+        elif self.path == '/api/recompile/output':
+            self.handle_recompile_output()
         else:
             self.send_error(404)
 
@@ -1012,16 +1230,50 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
             with open(temp_path, 'wb') as f:
                 f.write(uploaded_file.file.read())
 
-            # Read and parse the file
-            with open(temp_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            # Read and parse the file with proper encoding handling
+            try:
+                with open(temp_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except UnicodeDecodeError:
+                # Fallback to other encodings if UTF-8 fails
+                encodings = ['cp932', 'shift_jis', 'latin-1']
+                content = None
+                for encoding in encodings:
+                    try:
+                        with open(temp_path, 'r', encoding=encoding) as f:
+                            content = f.read()
+                        break
+                    except UnicodeDecodeError:
+                        continue
+
+                if content is None:
+                    # Last resort - read as bytes and decode with errors='replace'
+                    with open(temp_path, 'rb') as f:
+                        raw_data = f.read()
+                    content = raw_data.decode('utf-8', errors='replace')
+
+            # Ensure content is a string
+            if not isinstance(content, str):
+                content = str(content)
 
             # Parse the content
-            entries, parse_result = parse_github_format(content)
+            try:
+                entries, parse_result = parse_github_format(content)
+            except Exception as parse_error:
+                self.send_json_response({
+                    "success": False,
+                    "message": f"Parsing error: {str(parse_error)}"
+                })
+                return
 
             # Validate with validator
-            validator = WSCValidator()
-            validation_result = validator.comprehensive_validation(content, entries)
+            try:
+                validator = WSCValidator()
+                validation_result = validator.comprehensive_validation(content, entries)
+            except Exception as validation_error:
+                # If validation fails due to encoding issues, still return the parsed entries
+                validation_result = ValidationResult()
+                validation_result.add_warning(f"Validation error (but parsing succeeded): {str(validation_error)}")
 
             # Clean up temp file
             try:
@@ -1160,6 +1412,7 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
             entries_data = data.get('entries', [])
             preserve_offsets = data.get('preserve_offsets', True)
             filename = data.get('filename', 'recompiled.wsc')
+            custom_output_dir = data.get('output_directory', '')
 
             # Convert back to WSCEntry objects
             from recompiler import WSCEntry
@@ -1177,20 +1430,45 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
             from recompiler import reconstruct_wsc_binary
             binary_data = reconstruct_wsc_binary(entries, preserve_offsets)
 
-            # Save to temporary file
-            temp_path = f"recompile_output_{filename}"
-            with open(temp_path, 'wb') as f:
+            # Use custom output directory or default
+            if custom_output_dir:
+                # Handle relative paths
+                if custom_output_dir.startswith('./'):
+                    output_folder = os.path.join(os.getcwd(), custom_output_dir[2:])
+                elif custom_output_dir.startswith('/'):
+                    output_folder = custom_output_dir
+                else:
+                    output_folder = os.path.join(os.getcwd(), custom_output_dir)
+            else:
+                output_folder = os.path.join(os.getcwd(), "recompiler_output")
+
+            os.makedirs(output_folder, exist_ok=True)
+
+            # Generate output filename - keep same name, change .txt to .WSC
+            # Special handling for .WSC.txt files - just remove .txt
+            if filename.lower().endswith('.wsc.txt'):
+                output_filename = filename[:-4]  # Remove .txt
+            else:
+                # For other files, change extension to .WSC
+                base_name = os.path.splitext(filename)[0]
+                output_filename = f"{base_name}.WSC"
+            output_path = os.path.join(output_folder, output_filename)
+
+            # Save compiled WSC file to output folder
+            with open(output_path, 'wb') as f:
                 f.write(binary_data)
 
             # Get file info
             file_size = len(binary_data)
-            file_path = os.path.abspath(temp_path)
+            file_path = os.path.abspath(output_path)
 
             response = {
                 "success": True,
-                "filename": filename,
+                "filename": output_filename,
+                "original_filename": filename,
                 "file_size": file_size,
                 "file_path": file_path,
+                "output_folder": output_folder,
                 "entries_count": len(entries),
                 "preserve_offsets": preserve_offsets,
                 "offsets_recalculated": not preserve_offsets or not all(
@@ -1203,6 +1481,54 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
 
         except Exception as e:
             self.send_json_response({"success": False, "message": f"Compilation error: {str(e)}"})
+
+    def handle_recompile_output(self):
+        """Handle request to list files in output folder."""
+        try:
+            output_folder = os.path.join(os.getcwd(), "recompiler_output")
+
+            if not os.path.exists(output_folder):
+                # Create output folder if it doesn't exist
+                os.makedirs(output_folder, exist_ok=True)
+                self.send_json_response({
+                    "success": True,
+                    "output_folder": output_folder,
+                    "files": [],
+                    "message": "Output folder created"
+                })
+                return
+
+            # List all .wsc files in output folder
+            files = []
+            try:
+                for filename in os.listdir(output_folder):
+                    if filename.endswith('.wsc'):
+                        file_path = os.path.join(output_folder, filename)
+                        stat = os.stat(file_path)
+                        files.append({
+                            "filename": filename,
+                            "file_path": file_path,
+                            "file_size": stat.st_size,
+                            "created_time": datetime.fromtimestamp(stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S'),
+                            "modified_time": datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                        })
+
+                # Sort files by creation time (newest first)
+                files.sort(key=lambda x: x['created_time'], reverse=True)
+
+            except Exception as e:
+                self.send_json_response({"success": False, "message": f"Error listing files: {str(e)}"})
+                return
+
+            self.send_json_response({
+                "success": True,
+                "output_folder": output_folder,
+                "files": files,
+                "total_files": len(files)
+            })
+
+        except Exception as e:
+            self.send_json_response({"success": False, "message": f"Error accessing output folder: {str(e)}"})
 
     def handle_download(self):
         """Handle file download requests."""
@@ -1218,12 +1544,16 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
             file_path = query_params['file'][0]
 
             # Security check - prevent directory traversal
-            if '..' in file_path or not file_path.startswith('/'):
+            if '..' in file_path:
                 self.send_error(400, "Invalid file path")
                 return
 
-            # Check if file exists and is a temporary recompile file
-            if not os.path.exists(file_path) or not file_path.startswith('recompile_output_'):
+            # Allow files from recompiler_output folder or old temp files
+            output_folder = os.path.join(os.getcwd(), "recompiler_output")
+            is_valid_output_file = os.path.abspath(file_path).startswith(output_folder) and file_path.endswith('.wsc')
+            is_valid_temp_file = file_path.startswith('recompile_output_')
+
+            if not os.path.exists(file_path) or not (is_valid_output_file or is_valid_temp_file):
                 self.send_error(404, "File not found")
                 return
 

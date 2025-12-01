@@ -1,4 +1,5 @@
 {
   "output_dir": "/home/sakimichi/Projects/wsc-gui/test_output",
-  "last_input_dir": ""
+  "last_input_dir": "",
+  "outputDirectory": "/home/sakimichi/Projects/wsc-gui/recompiler_output"
 }

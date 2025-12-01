@@ -146,9 +146,21 @@ def content_to_binary(content: str, is_speaker: bool = False) -> bytes:
                 encoded = content.strip().encode('cp932')
                 return b'\x0F\x0F' + encoded + b'\x00'
             except UnicodeEncodeError:
-                # Fallback encoding
-                encoded, _ = decode_try(content.strip().encode('utf-8'))
-                return b'\x0F\x0F' + encoded + b'\x00'
+                # Fallback encoding - handle problematic content
+                try:
+                    # Try different encodings
+                    for encoding in ['cp932', 'shift_jis', 'latin-1']:
+                        try:
+                            encoded = content.strip().encode(encoding)
+                            return b'\x0F\x0F' + encoded + b'\x00'
+                        except:
+                            continue
+                    # Last resort - replace problematic characters
+                    encoded = content.strip().encode('latin-1', errors='replace')
+                    return b'\x0F\x0F' + encoded + b'\x00'
+                except Exception:
+                    # Ultimate fallback - empty content
+                    return b'\x00'
         else:
             # Empty speaker - just return null terminator
             return b'\x00'
@@ -167,15 +179,35 @@ def content_to_binary(content: str, is_speaker: bool = False) -> bytes:
                     encoded = content.encode('cp932')
                     return b'\x0F' + encoded + b'\x00'
                 except UnicodeEncodeError:
-                    encoded, _ = decode_try(content.encode('utf-8'))
-                    return b'\x0F' + encoded + b'\x00'
+                    # Fallback encoding for problematic content
+                    try:
+                        for encoding in ['cp932', 'shift_jis', 'latin-1']:
+                            try:
+                                encoded = content.encode(encoding)
+                                return b'\x0F' + encoded + b'\x00'
+                            except:
+                                continue
+                        encoded = content.encode('latin-1', errors='replace')
+                        return b'\x0F' + encoded + b'\x00'
+                    except Exception:
+                        return b'\x00'
             else:
                 # Regular content (resources, audio, commands)
                 try:
                     return content.encode('cp932') + b'\x00'
                 except UnicodeEncodeError:
-                    encoded, _ = decode_try(content.encode('utf-8'))
-                    return encoded + b'\x00'
+                    # Fallback encoding for problematic content
+                    try:
+                        for encoding in ['cp932', 'shift_jis', 'latin-1']:
+                            try:
+                                encoded = content.encode(encoding)
+                                return encoded + b'\x00'
+                            except:
+                                continue
+                        encoded = content.encode('latin-1', errors='replace')
+                        return encoded + b'\x00'
+                    except Exception:
+                        return b'\x00'
         else:
             # Empty content
             return b'\x00'
