@@ -1072,6 +1072,8 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_settings_update()
         elif self.path.startswith('/api/recompile/'):
             self.handle_recompile_requests()
+        elif self.path.startswith('/download'):
+            self.handle_download()
         else:
             self.send_error(404)
 
@@ -1646,12 +1648,25 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(400, "Invalid file path")
                 return
 
-            # Allow files from recompiler_output folder or old temp files
+            # Allow files from recompiler_output folder - handle both WSL paths
             output_folder = os.path.join(os.getcwd(), "recompiler_output")
-            is_valid_output_file = os.path.abspath(file_path).startswith(output_folder) and file_path.endswith('.wsc')
+
+            # Check if the file exists and has valid WSC extension
+            file_exists = os.path.exists(file_path)
+            has_valid_extension = file_path.endswith('.wsc') or file_path.endswith('.WSC')
+
+            # Check multiple valid output folder paths (WSL compatibility)
+            abs_file_path = os.path.abspath(file_path)
+            is_valid_output_file = (
+                has_valid_extension and file_exists and (
+                    abs_file_path.startswith(output_folder) or  # Current working directory
+                    abs_file_path.endswith('/recompiler_output/' + os.path.basename(file_path)) or  # Any recompiler_output folder
+                    ('recompiler_output' in abs_file_path and has_valid_extension)  # Contains recompiler_output path
+                )
+            )
             is_valid_temp_file = file_path.startswith('recompile_output_')
 
-            if not os.path.exists(file_path) or not (is_valid_output_file or is_valid_temp_file):
+          if not file_exists or not (is_valid_output_file or is_valid_temp_file):
                 self.send_error(404, "File not found")
                 return
 
