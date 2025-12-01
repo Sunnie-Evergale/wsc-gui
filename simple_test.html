@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>JavaScript Test</title>
+</head>
+<body>
+    <div id="test">Click me to test</div>
+    <script>
+        console.log('JavaScript loaded');
+
+        function switchTab(tabName) {
+            console.log('Tab switched to:', tabName);
+            document.getElementById('test').textContent = 'Tab switched to: ' + tabName;
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM loaded');
+            document.getElementById('test').addEventListener('click', function() {
+                switchTab('test');
+            });
+        });
+    </script>
+</body>
+</html>

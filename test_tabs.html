@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tab Switching Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .tab-button {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin-right: 5px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .tab-button.active { background: #2980b9; }
+        .tab-content { display: none; margin-top: 20px; padding: 20px; border: 1px solid #ddd; border-radius: 4px; }
+        .tab-content.active { display: block; }
+    </style>
+</head>
+<body>
+    <h1>WSC Tab Switching Test</h1>
+
+    <div>
+        <button id="decompilerTab" class="tab-button active" onclick="switchTab('decompiler')">📖 Decompiler</button>
+        <button id="recompilerTab" class="tab-button" onclick="switchTab('recompiler')">✏️ Recompiler</button>
+    </div>
+
+    <div id="decompilerTabContent" class="tab-content active">
+        <h2>📖 Decompiler Tab</h2>
+        <p>This is the decompiler content area.</p>
+    </div>
+
+    <div id="recompilerTabContent" class="tab-content">
+        <h2>✏️ Recompiler Tab</h2>
+        <p>This is the recompiler content area.</p>
+    </div>
+
+    <script>
+        function switchTab(tabName) {
+            console.log('Switching to tab:', tabName);
+
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+
+            // Remove active class from all tabs
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.classList.remove('active');
+            });
+
+            // Show selected tab content
+            const tabContent = document.getElementById(tabName + 'TabContent');
+            const tabButton = document.getElementById(tabName + 'Tab');
+
+            if (tabContent) {
+                tabContent.classList.add('active');
+                console.log('Tab content found and activated');
+            } else {
+                console.error('Tab content not found:', tabName + 'TabContent');
+            }
+
+            if (tabButton) {
+                tabButton.classList.add('active');
+                console.log('Tab button found and activated');
+            } else {
+                console.error('Tab button not found:', tabName + 'Tab');
+            }
+        }
+
+        // Test function availability
+        console.log('switchTab function defined:', typeof switchTab);
+
+        // Add event listeners as backup
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM loaded, setting up event listeners');
+
+            const decompilerTab = document.getElementById('decompilerTab');
+            const recompilerTab = document.getElementById('recompilerTab');
+
+            if (decompilerTab) {
+                decompilerTab.addEventListener('click', function() {
+                    console.log('Decompiler tab clicked');
+                    switchTab('decompiler');
+                });
+                console.log('Decompiler tab event listener added');
+            }
+
+            if (recompilerTab) {
+                recompilerTab.addEventListener('click', function() {
+                    console.log('Recompiler tab clicked');
+                    switchTab('recompiler');
+                });
+                console.log('Recompiler tab event listener added');
+            }
+        });
+    </script>
+</body>
+</html>

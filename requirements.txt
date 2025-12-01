@@ -1,0 +1,10 @@
+# WSC Decompiler Requirements
+
+# Core dependencies (CLI only - no GUI)
+# No external dependencies required for basic functionality
+
+# GUI dependencies
+tkinterdnd2  # For drag-and-drop support in full GUI
+
+# Development/build dependencies
+pyinstaller  # For creating standalone executables
