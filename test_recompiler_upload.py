@@ -30,7 +30,7 @@ def test_recompiler_upload():
     print("🧪 Testing Recompiler Upload Functionality")
     print("=" * 50)
 
-    base_url = "http://localhost:8101"
+    base_url = "http://localhost:8104"
 
     try:
         # Create test file content

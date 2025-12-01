@@ -556,56 +556,109 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
                 return;
             }
 
-            recompilerLog(`Loading file: ${file.name}...`, 'info');
+            // Show loading indicator
+            recompilerLog(`📁 Loading file: ${file.name} (${(file.size / 1024).toFixed(1)} KB)...`, 'info');
+            recompilerLog('⏳ Processing large file, please wait...', 'info');
 
             const formData = new FormData();
             formData.append('file', file);
 
+            // Add timeout to prevent hanging
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
             fetch('/api/recompile/upload', {
                 method: 'POST',
-                body: formData
+                body: formData,
+                signal: controller.signal
             })
-            .then(response => response.json())
+            .then(response => {
+                clearTimeout(timeoutId);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
             .then(data => {
+                recompilerLog('📡 Server response received', 'info');
+
                 if (data.success) {
                     recompilerEntries = data.entries;
-                    recompileFilename = data.filename.replace('.txt', '.wsc');
+                    recompileFilename = data.filename.replace('.txt', '.WSC');
 
-                    // Debug: Log all loaded entries
-                    recompilerLog(`Loaded ${data.entries.length} entries from ${data.filename}:`, 'success');
-                    data.entries.forEach((entry, index) => {
-                        const type = entry.is_speaker ? '[SPEAKER]' : '[TEXT]';
-                        recompilerLog(`  Entry ${index + 1}: ${type} "${entry.content}"`, 'info');
-                    });
+                    // Log summary first, then details
+                    recompilerLog(`✅ Successfully loaded ${data.entries.length} entries from ${data.filename}:`, 'success');
 
-                    // Display content in editor
-                    const content = formatEntriesAsText(data.entries);
-                    document.getElementById('editorContent').value = content;
+                    // Limit detailed logging for large files to prevent browser freeze
+                    const maxDetailedEntries = 20;
+                    if (data.entries.length <= maxDetailedEntries) {
+                        data.entries.forEach((entry, index) => {
+                            const type = entry.is_speaker ? '[SPEAKER]' : '[TEXT]';
+                            const contentPreview = entry.content.length > 50 ? entry.content.substring(0, 50) + '...' : entry.content;
+                            recompilerLog(`  Entry ${index + 1}: ${type} "${contentPreview}"`, 'info');
+                        });
+                    } else {
+                        recompilerLog(`📋 Showing first ${maxDetailedEntries} entries (${data.entries.length - maxDetailedEntries} more hidden)`, 'info');
+                        for (let i = 0; i < maxDetailedEntries && i < data.entries.length; i++) {
+                            const entry = data.entries[i];
+                            const type = entry.is_speaker ? '[SPEAKER]' : '[TEXT]';
+                            const contentPreview = entry.content.length > 50 ? entry.content.substring(0, 50) + '...' : entry.content;
+                            recompilerLog(`  Entry ${i + 1}: ${type} "${contentPreview}"`, 'info');
+                        }
+                    }
 
-                    // Show workspace
-                    document.getElementById('recompilerWorkspace').style.display = 'block';
+                    // Use setTimeout to prevent UI blocking
+                    setTimeout(() => {
+                        // Display content in editor
+                        const content = formatEntriesAsText(data.entries);
+                        const editorElement = document.getElementById('editorContent');
+                        editorElement.value = content;
 
-                    // Update file info
-                    updateRecompileFileInfo(data);
+                        // Show workspace
+                        document.getElementById('recompilerWorkspace').style.display = 'block';
 
-                    // Show initial validation results
-                    displayValidationResults(data.parse_result, data.validation_result);
+                        // Update file info
+                        updateRecompileFileInfo(data);
 
-                    recompilerLog(`Ready to compile. Editor contains ${content.length} characters.`, 'info');
+                        // Show initial validation results
+                        displayValidationResults(data.parse_result, data.validation_result);
+
+                        recompilerLog(`📝 Ready to compile. Editor contains ${content.length} characters.`, 'info');
+                        recompilerLog(`💡 Tip: Click "Compile to WSC" when ready to generate your WSC file.`, 'info');
+                    }, 100); // Small delay to prevent blocking
+
                 } else {
-                    recompilerLog(`Error loading file: ${data.message}`, 'error');
+                    recompilerLog(`❌ Error loading file: ${data.message}`, 'error');
                 }
             })
             .catch(error => {
-                recompilerLog(`Network error: ${error.message}`, 'error');
+                clearTimeout(timeoutId);
+                if (error.name === 'AbortError') {
+                    recompilerLog('⏰ Upload timeout (30s). File may be too large or server is busy.', 'error');
+                } else {
+                    recompilerLog(`❌ Network error: ${error.message}`, 'error');
+                    if (error.stack) {
+                        recompilerLog(`   Stack: ${error.stack.substring(0, 200)}...`, 'error');
+                    }
+                }
             });
         }
 
         function formatEntriesAsText(entries) {
-            return entries.map(entry => {
-                const speaker_prefix = entry.is_speaker ? '.' : '';
-                return `<${entry.start_offset.toString(16).padStart(8, '0').toUpperCase()}:${entry.end_offset.toString(16).padStart(8, '0').toUpperCase()}>\\n${speaker_prefix}${entry.content}\\n`;
-            }).join('');
+            // Use a more efficient approach for large files
+            const chunks = [];
+            const chunkSize = 100; // Process 100 entries at a time
+
+            for (let i = 0; i < entries.length; i += chunkSize) {
+                const chunk = entries.slice(i, i + chunkSize);
+                const chunkText = chunk.map(entry => {
+                    const speaker_prefix = entry.is_speaker ? '.' : '';
+                    return `<${entry.start_offset.toString(16).padStart(8, '0').toUpperCase()}:${entry.end_offset.toString(16).padStart(8, '0').toUpperCase()}>\\n${speaker_prefix}${entry.content}\\n`;
+                }).join('');
+                chunks.push(chunkText);
+            }
+
+            return chunks.join('');
         }
 
         function updateRecompileFileInfo(data) {
@@ -698,14 +751,28 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
                 return;
             }
 
-            // Debug: Show how many entries we're compiling
-            recompilerLog(`Compiling ${recompilerEntries.length} entries to WSC format...`, 'info');
+            // Show compilation start message
+            recompilerLog(`🔨 Starting compilation of ${recompilerEntries.length} entries to WSC format...`, 'info');
+            recompilerLog('⏳ Processing large file, please wait...', 'info');
 
-            // Log each entry being compiled
-            recompilerEntries.forEach((entry, index) => {
-                const type = entry.is_speaker ? '[SPEAKER]' : '[TEXT]';
-                recompilerLog(`  Entry ${index + 1}: ${type} "${entry.content}" (${entry.start_offset}-${entry.end_offset})`, 'info');
-            });
+            // Limit detailed logging to prevent browser freeze
+            const maxLogEntries = 10;
+            if (recompilerEntries.length <= maxLogEntries) {
+                recompilerEntries.forEach((entry, index) => {
+                    const type = entry.is_speaker ? '[SPEAKER]' : '[TEXT]';
+                    const contentPreview = entry.content.length > 30 ? entry.content.substring(0, 30) + '...' : entry.content;
+                    recompilerLog(`  Entry ${index + 1}: ${type} "${contentPreview}"`, 'info');
+                });
+            } else {
+                recompilerLog(`📋 Processing ${recompilerEntries.length} entries (showing first ${maxLogEntries})`, 'info');
+                for (let i = 0; i < maxLogEntries && i < recompilerEntries.length; i++) {
+                    const entry = recompilerEntries[i];
+                    const type = entry.is_speaker ? '[SPEAKER]' : '[TEXT]';
+                    const contentPreview = entry.content.length > 30 ? entry.content.substring(0, 30) + '...' : entry.content;
+                    recompilerLog(`  Entry ${i + 1}: ${type} "${contentPreview}"`, 'info');
+                }
+                recompilerLog(`    ... ${recompilerEntries.length - maxLogEntries} more entries`, 'info');
+            }
 
             const requestData = {
                 entries: recompilerEntries,
@@ -714,26 +781,57 @@ class WSCWebHandler(http.server.SimpleHTTPRequestHandler):
                 output_directory: getCurrentOutputDirectory()
             };
 
+            // Add timeout to prevent hanging
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+
+            recompilerLog('📡 Sending compilation request to server...', 'info');
+
             fetch('/api/recompile/compile', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestData)
+                body: JSON.stringify(requestData),
+                signal: controller.signal
             })
-            .then(response => response.json())
+            .then(response => {
+                clearTimeout(timeoutId);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                recompilerLog('📡 Server response received', 'info');
+                return response.json();
+            })
             .then(data => {
+                recompilerLog('📦 Processing server response...', 'info');
+
                 if (data.success) {
                     compiledWSCPath = data.file_path;
-                    recompilerLog(`✅ Successfully compiled ${data.entries_count} entries`, 'success');
-                    recompilerLog(`📁 Saved to: ${data.output_folder}`, 'info');
-                    recompilerLog(`📄 Filename: ${data.filename}`, 'info');
-                    recompilerLog(`File size: ${data.file_size} bytes`, 'info');
-                    recompilerLog(`Offsets recalculated: ${data.offsets_recalculated ? 'Yes' : 'No'}`, 'info');
+                    recompilerLog(`✅ Successfully compiled ${data.entries_count} entries!`, 'success');
+                    recompilerLog(`📁 Output folder: ${data.output_folder}`, 'success');
+                    recompilerLog(`📄 Compiled filename: ${data.filename}`, 'success');
+                    recompilerLog(`📏 File size: ${data.file_size.toLocaleString()} bytes`, 'info');
+
+                    if (data.offsets_recalculated) {
+                        recompilerLog(`🔄 Offsets were recalculated for optimal performance`, 'info');
+                    } else {
+                        recompilerLog(`✅ Original offsets preserved`, 'info');
+                    }
+
+                    recompilerLog(`💾 WSC file ready for download`, 'success');
                 } else {
-                    recompilerLog(`Compilation error: ${data.message}`, 'error');
+                    recompilerLog(`❌ Compilation error: ${data.message}`, 'error');
                 }
             })
             .catch(error => {
-                recompilerLog(`Compilation error: ${error.message}`, 'error');
+                clearTimeout(timeoutId);
+                if (error.name === 'AbortError') {
+                    recompilerLog('⏰ Compilation timeout (60s). File may be too complex or server is busy.', 'error');
+                } else {
+                    recompilerLog(`❌ Network error: ${error.message}`, 'error');
+                    if (error.stack) {
+                        recompilerLog(`   Stack: ${error.stack.substring(0, 200)}...`, 'error');
+                    }
+                }
             });
         }
 
